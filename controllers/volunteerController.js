@@ -5,12 +5,6 @@ import { sendEmail } from "../utils/sendEmail.js";
 import { sendToken } from "../utils/sendToken.js";
 import crypto from "crypto";
 
-
-
-
-// const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
-// console.log("client:", client);
-
 export const register = catchAsyncError(async (req, res, next) => {
   try {
     const {
@@ -28,6 +22,7 @@ export const register = catchAsyncError(async (req, res, next) => {
       policeVerification,
       educationQualification,
     } = req.body;
+
     if (
       !name ||
       !email ||
@@ -45,6 +40,8 @@ export const register = catchAsyncError(async (req, res, next) => {
     ) {
       return next(new ErrorHandler("All fields are required.", 400));
     }
+
+    // Validate phone number format
     function validatePhoneNumber(phone) {
       const phoneRegex = /^\+91\d{10}$/;
       return phoneRegex.test(phone);
@@ -54,39 +51,30 @@ export const register = catchAsyncError(async (req, res, next) => {
       return next(new ErrorHandler("Invalid phone number.", 400));
     }
 
-    const existingvolunteer = await Volunteer.findOne({
+    // Check if both email and phone are used together before
+    const existingVolunteer = await Volunteer.findOne({
       $or: [
-        {
-          email,
-          accountVerified: true,
-        },
-        {
-          phone,
-          accountVerified: true,
-        },
+        { email, phone, accountVerified: true }, // Check for both email and phone
       ],
     });
 
-    if (existingvolunteer) {
-      return next(new ErrorHandler("Phone or Email is already used.", 400));
+    if (existingVolunteer) {
+      return next(new ErrorHandler("This email and phone combination is already used.", 400));
     }
 
-    const registerationAttemptsByvolunteer = await Volunteer.find({
+    // Check if the email alone or phone alone is already registered but not verified
+    const existingEmailPhone = await Volunteer.findOne({
       $or: [
-        { phone, accountVerified: false },
         { email, accountVerified: false },
+        { phone, accountVerified: false },
       ],
     });
 
-    if (registerationAttemptsByvolunteer.length > 50) {
-      return next(
-        new ErrorHandler(
-          "You have exceeded the maximum number of attempts (3). Please try again after an hour.",
-          400
-        )
-      );
+    if (existingEmailPhone) {
+      return next(new ErrorHandler("Email or phone already exists. Use a different one.", 400));
     }
 
+    // Create volunteer data and registration
     const volunteerData = {
       name,
       email,
@@ -105,25 +93,21 @@ export const register = catchAsyncError(async (req, res, next) => {
     const volunteer = await Volunteer.create(volunteerData);
     const verificationCode = await volunteer.generateVerificationCode();
     await volunteer.save();
-    sendVerificationCode(
-      verificationMethod,
-      verificationCode,
-      name,
-      email,
-      phone,
-      res
-    );
+    
+    // Send the verification code via the selected method
+    sendVerificationCode(verificationMethod, verificationCode, name, email, res);
   } catch (error) {
     next(error);
   }
 });
+
+
 
 async function sendVerificationCode(
   verificationMethod,
   verificationCode,
   name,
   email,
-  phone,
   res
 ) {
   try {
@@ -134,24 +118,10 @@ async function sendVerificationCode(
         success: true,
         message: `Verification email successfully sent to ${name}`,
       });
-    } else if (verificationMethod === "phone") {
-      const verificationCodeWithSpace = verificationCode
-        .toString()
-        .split("")
-        .join(" ");
-      await twilioClient.calls.create({
-        twiml: `<Response><Say>Your verification code is ${verificationCodeWithSpace}. Your verification code is ${verificationCodeWithSpace}.</Say></Response>`,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: phone,
-      });
-      res.status(200).json({
-        success: true,
-        message: `OTP sent.`,
-      });
     } else {
       return res.status(400).json({
         success: false,
-        message: "Invalid verification method.",
+        message: "Invalid verification method. Only email is supported.",
       });
     }
   } catch (error) {
